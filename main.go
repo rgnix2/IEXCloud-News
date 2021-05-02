@@ -3,22 +3,20 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
+	"flag"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/gen2brain/beeep"
-	"github.com/gen2brain/dlgs"
+	"github.com/go-toast/toast"
+	"github.com/joho/godotenv"
 )
 
 const (
-	symbols            string = "aal,aapl,f,tsla"
-	token_sand         string = "Tpk_"
-	token_live         string = "pk_"
-	api_sand           string = "https://sandbox-sse.iexapis.com/stable/news-stream?token=" + token_sand + "&symbols=" + symbols
-	api_live           string = "https://cloud-sse.iexapis.com/stable/news-stream?token=" + token_live + "&symbols=" + symbols
+	sandUrl            string = "https://sandbox-sse.iexapis.com/stable/"
+	liveUrl            string = "https://cloud-sse.iexapis.com/stable/"
 	MaxIdleConnections int    = 20
 	RequestTimeout     int    = 5
 )
@@ -35,18 +33,74 @@ type Data struct {
 	Haspaywall bool   `json:"hasPaywall"`
 }
 
+var (
+	appPath   string
+	iexSand   string
+	iexLive   string
+	liveToken string
+	sandToken string
+	apiUrl    string
+)
+
+func init() {
+	// get app path
+	getPath, err := os.Getwd()
+	if err != nil {
+		log.Println(err)
+	}
+
+	appPath = getAsset(getPath)
+
+	// get env file
+	err = godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	sandToken = os.Getenv("TOKEN_SAND")
+	liveToken = os.Getenv("TOKEN_LIVE")
+
+	// set flags
+	var isDebug bool
+	var getStocks string
+
+	flag.StringVar(&getStocks, "stock", "", "fb,appl,tsla")
+	flag.BoolVar(&isDebug, "debug", false, "true")
+	flag.Parse()
+
+	// api url structure
+	iexSand = sandUrl + "news-stream?token=" + sandToken + "&symbols=" + getStocks
+	iexLive = liveUrl + "news-stream?token=" + liveToken + "&symbols=" + getStocks
+
+	if isDebug {
+		log.Println("Debug: Sandbox data")
+		apiUrl = iexSand
+	}
+	if !isDebug {
+		log.Println("Live: Listening for news..")
+		apiUrl = iexLive
+	}
+
+}
+
 func main() {
-	log.Println(api_sand)
-	resp, _ := http.Get(api_live)
+
+	resp, err := http.Get(apiUrl)
+	if err != nil {
+		log.Fatalln(err)
+	}
 
 	reader := bufio.NewReader(resp.Body)
-	for {
-		line, _ := reader.ReadBytes('\n')
-		stringObject := string(line)
-		//log.Println("Size: ", len(stringObject))
-		if len(stringObject) > 10 {
 
-			log.Println(string(line))
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		stringObject := string(line)
+
+		if len(stringObject) > 10 {
 			strReplace := strings.NewReplacer("data:", "", "[", "", "]", "", "\r", "", "\n", "")
 			newString := strReplace.Replace(stringObject)
 
@@ -59,29 +113,35 @@ func main() {
 			}
 
 			var data Data
-			_ = json.Unmarshal([]byte(newString), &data)
-			//log.Println(data.Headline)
-			log.Printf("Headline %s, related: %s, Link: %s Sum: %s", data.Headline, data.Related, data.URL, data.Summary)
-
-			// Testing Alerts
-			/// could be used for windows notification (not clickable ) to send to news alert site
-			err := beeep.Alert(data.Headline, data.Summary+" "+data.Source, "assets/warning.png")
+			err = json.Unmarshal([]byte(newString), &data)
 			if err != nil {
-				panic(err)
+				log.Fatalln(err)
 			}
 
-			/// pops dialog window - could be work around for allowing click and open browser to send you to news website of alert message
-			yes, err := dlgs.Question(data.Headline, "Go to news articale?", true)
-			if err != nil {
-				panic(err)
+			log.Println("New News:", data.Source)
+
+			// Alerts
+			notification := toast.Notification{
+				AppID:               "NixStockNews",
+				Title:               data.Headline,
+				Message:             data.Summary,
+				ActivationArguments: data.URL + "?token=" + liveToken,
+				Icon:                appPath,
 			}
-			fmt.Println(yes)
-
-		} else {
-			log.Println("empty")
-
+			err := notification.Push()
+			if err != nil {
+				log.Fatalln(err)
+			}
 		}
-
 		time.Sleep(5 * time.Second)
 	}
+}
+
+func getAsset(path string) string {
+
+	strReplace := strings.NewReplacer("\\", "/")
+	newString := strReplace.Replace(path)
+	assetString := newString + "/assets/alert.png"
+
+	return assetString
 }
